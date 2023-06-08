@@ -1,0 +1,83 @@
+diff --git a/relayer/storage.metrics.ts b/relayer/storage.metrics.ts
+index 72de5f3..f4c8cb1 100644
+--- a/relayer/storage.metrics.ts
++++ b/relayer/storage.metrics.ts
+@@ -1,4 +1,4 @@
+-import { Gauge, Histogram, Registry } from "prom-client";
++import { Counter, Gauge, Histogram, Registry } from "prom-client";
+ 
+ export function createStorageMetrics(
+   storageRegistry: Registry = new Registry(),
+@@ -24,6 +24,18 @@ export function createStorageMetrics(
+         labelNames: ["queue"],
+         registers: [storageRegistry],
+       }),
++      completedCounter: new Counter({
++        name: `completed_workflows`,
++        help: "Total number of completed jobs",
++        labelNames: ["queue"],
++        registers: [storageRegistry],
++      }),
++      failedCounter: new Counter({
++        name: `failed_workflows`,
++        help: "Total number of failed jobs",
++        labelNames: ["queue"],
++        registers: [storageRegistry],
++      }),
+       processedDuration: new Histogram({
+         name: `worklow_processing_duration`,
+         help: "Processing time in ms for completed jobs (processing until completed)",
+diff --git a/relayer/storage/redis-storage.ts b/relayer/storage/redis-storage.ts
+index cc77520..9eef5e8 100644
+--- a/relayer/storage/redis-storage.ts
++++ b/relayer/storage/redis-storage.ts
+@@ -9,7 +9,7 @@ import {
+   RedisOptions,
+ } from "ioredis";
+ import { createStorageMetrics } from "../storage.metrics";
+-import { Gauge, Histogram, Registry } from "prom-client";
++import { Counter, Gauge, Histogram, Registry } from "prom-client";
+ import { sleep } from "../utils";
+ import { onJobHandler, RelayJob, Storage } from "./storage";
+ import { KoaAdapter } from "@bull-board/koa";
+@@ -87,6 +87,8 @@ export class RedisStorage implements Storage {
+     delayedGauge: Gauge<string>;
+     waitingGauge: Gauge<string>;
+     activeGauge: Gauge<string>;
++    completedCounter: Counter<string>;
++    failedCounter: Counter<string>;
+     completedDuration: Histogram<string>;
+     processedDuration: Histogram<string>;
+   };
+@@ -204,6 +206,7 @@ export class RedisStorage implements Storage {
+     this.workerId = this.worker.id;
+ 
+     this.worker.on("completed", this.onCompleted.bind(this));
++    this.worker.on("failed", this.onFailed.bind(this));
+     this.spawnGaugeUpdateWorker();
+   }
+ 
+@@ -233,6 +236,9 @@ export class RedisStorage implements Storage {
+   private async onCompleted(job: Job) {
+     const completedDuration = job.finishedOn! - job.timestamp!; // neither can be null
+     const processedDuration = job.finishedOn! - job.processedOn!; // neither can be null
++    this.metrics.completedCounter
++      .labels({ queue: this.vaaQueue.name })
++      .inc();
+     this.metrics.completedDuration
+       .labels({ queue: this.vaaQueue.name })
+       .observe(completedDuration);
+@@ -241,6 +247,13 @@ export class RedisStorage implements Storage {
+       .observe(processedDuration);
+   }
+ 
++  private async onFailed(job: Job) {
++    // TODO: Add a failed duration metric for processing time for failed jobs
++    this.metrics.failedCounter
++      .labels({ queue: this.vaaQueue.name })
++      .inc();
++  }
++
+   storageKoaUI(path: string) {
+     // UI
+     const serverAdapter = new KoaAdapter();
